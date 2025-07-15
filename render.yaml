@@ -1,7 +1,8 @@
 services:
-  - type: worker
-    name: cutebaby-fetcher
+  - type: web
+    name: cutebaby-web-scraper
     runtime: python
     plan: free
     buildCommand: ""
-    startCommand: python worker.py
+    startCommand: python app.py
+    envVars: []
