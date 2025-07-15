@@ -1,5 +1,6 @@
 from flask import Flask
 import requests
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
@@ -16,10 +17,26 @@ def run_scraper():
     try:
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
-        html_output = response.text
-        return f"<pre>{html_output}</pre>"
+
+        html = response.text
+
+        # Parse with BeautifulSoup to find vote count
+        soup = BeautifulSoup(html, "html.parser")
+        
+        # Try to extract the text where the vote count appears
+        # This depends on structure, example assumes it's inside something like <strong>123 Votes</strong>
+        vote_text = soup.find(string=lambda text: text and "Vote" in text)
+        
+        if vote_text:
+            print(f"[LOG] Found vote text: {vote_text.strip()}")
+            return f"<b>Current vote text:</b> {vote_text.strip()}<br><br><pre>{html}</pre>"
+        else:
+            print("[LOG] Vote text not found")
+            return "Vote count not found.<br><br><pre>{}</pre>".format(html)
+
     except Exception as e:
-        return f"Error: {e}"
+        print(f"[ERROR] {e}")
+        return f"Error occurred: {e}"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
