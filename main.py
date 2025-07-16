@@ -1,90 +1,105 @@
-import time
-import threading
 import requests
-from flask import Flask, jsonify
 from bs4 import BeautifulSoup
+import time
+from datetime import datetime
 
-app = Flask(__name__)
+# === CONFIGURATION ===
+API_KEY = 'b053b424d79cf02ffc6f3cf1cda9a539'  # 9Hits API Key
+CAMPAIGN_ID = 39024103  # 9Hits Campaign ID
+CHECK_INTERVAL = 300  # 5 minutes
 
-# === Configuration ===
-TELEGRAM_TOKEN = '8014670303:AAEhi9_ajm8rZvu_LKUmBTMkIZNYnkxypok'  # Replace with your token
-TELEGRAM_CHAT_ID = '7742052478'                           # Replace with your chat ID
+TELEGRAM_TOKEN = '8014670303:AAEhi9_ajm8rZvu_LKUmBTMkIZNYnkxypok'  # Replace with your bot token
+TELEGRAM_CHAT_ID = '7742052478'  # Replace with your chat ID
 
-CUTE_BABY_URL = 'https://www.cutebabyvote.com/july-2025/?contest=photo-detail&photo_id=449487'
+VOTE_URL = "https://www.cutebabyvote.com/july-2025/?contest=photo-detail&photo_id=449487"
 
-API_KEY = 'b053b424d79cf02ffc6f3cf1cda9a539'             # 9Hits API Key
-CAMPAIGN_ID = 39024103                                   # 9Hits Campaign ID
+last_status = None  # First run
 
-# === Telegram Alert ===
+# === Send Telegram Message ===
 def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    telegram_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'text': message
+    }
     try:
-        requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': message})
+        requests.post(telegram_url, data=payload, timeout=10)
     except Exception as e:
-        print("Telegram Error:", e)
+        print(f"❌ Telegram Error: {e}")
 
-# === GET and Parse Cutebabyvote Page ===
-def check_cute_baby_vote():
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0'
-        }
-        resp = requests.get(CUTE_BABY_URL, headers=headers, timeout=10)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        if 'votes' in resp.text:
-            votes_text = soup.text.split("votes")[0].split()[-1]
-            print(f"[+] Found votes: {votes_text}")
-            send_telegram(f"👶 Cutebaby votes: {votes_text}")
-        else:
-            print("[!] No votes section found!")
-            send_telegram("⚠️ Warning: Vote info not found!")
-    except Exception as e:
-        print("Error:", e)
-        send_telegram("❌ Error checking Cutebaby page!")
-
-# === API Update: Pause/Resume Campaign ===
-def update_campaign_state(state='paused'):
+# === Update 9Hits Campaign State ===
+def update_campaign_state(new_state):
     url = f'https://panel.9hits.com/api/siteUpdate?key={API_KEY}'
     payload = {
         "id": CAMPAIGN_ID,
-        "state": state
+        "userState": new_state
     }
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/114.0.0.0 Safari/537.36"
+        )
+    }
+
     try:
-        r = requests.post(url, json=payload)
-        print(f"[API] Set campaign to {state}: {r.text}")
-        send_telegram(f"🛠️ Campaign state set to {state.upper()}")
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        print(f"→ 9Hits API Triggered: userState = '{new_state}'")
+        print(f"→ Status Code: {response.status_code}")
+        print(f"→ Response: {response.text.strip()[:300]}\n")
+        send_telegram(f"🔄 API Update: userState = '{new_state.upper()}' ✅")
     except Exception as e:
-        print("API Error:", e)
-        send_telegram("❌ API Update Failed!")
+        print(f"❌ Error sending API request: {e}\n")
+        send_telegram(f"❌ API request error: {e}")
 
-# === Background Task Runner ===
-def background_task():
+# === Check Voting Page ===
+def check_voting_status():
+    global last_status
+
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    try:
+        response = requests.get(VOTE_URL, headers=headers, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        warning_div = soup.find("div", class_="pc-image-info-box-button-btn-text")
+        warning_present = warning_div and "The voting button is temporarily disabled" in warning_div.text
+        current_status = "found" if warning_present else "not found"
+
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{timestamp}] Current Status: {current_status}")
+
+        # First run
+        if last_status is None:
+            print("🔁 First run detected.")
+            new_state = 'paused' if current_status == "found" else 'running'
+            update_campaign_state(new_state)
+            send_telegram(f"🕵️ First check: Warning {current_status.upper()}")
+        
+        # Status changed
+        elif last_status != current_status:
+            print("🔁 Status change detected.")
+            new_state = 'paused' if current_status == "found" else 'running'
+            update_campaign_state(new_state)
+            send_telegram(f"🔄 Status changed: Warning {current_status.upper()}")
+        
+        else:
+            print("✅ No change, no API request sent.\n")
+
+        last_status = current_status
+
+    except Exception as e:
+        print(f"[{datetime.now()}] ❌ Error checking site: {e}\n")
+        send_telegram(f"❌ Error checking site: {e}")
+
+# === Main Loop ===
+if __name__ == "__main__":
+    print("🟢 Voting Monitor + 9Hits Controller + Telegram Started...\n")
+    send_telegram("🚀 Bot started! Monitoring every 5 minutes.")
     while True:
-        check_cute_baby_vote()
-        time.sleep(180)  # Check every 3 minutes
-
-# === Flask Routes ===
-@app.route('/')
-def home():
-    return "🟢 Bot is running with CuteBaby & Telegram alerts"
-
-@app.route('/pause')
-def pause():
-    update_campaign_state('paused')
-    return jsonify({"status": "paused"})
-
-@app.route('/resume')
-def resume():
-    update_campaign_state('running')
-    return jsonify({"status": "running"})
-
-@app.route('/check')
-def manual_check():
-    check_cute_baby_vote()
-    return jsonify({"status": "checked"})
-
-# === Start Background Thread ===
-threading.Thread(target=background_task).start()
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+        check_voting_status()
+        time.sleep(CHECK_INTERVAL)
